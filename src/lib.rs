@@ -11,7 +11,7 @@ pub fn dump(path_buf: PathBuf)->Result<String,Error> {
     let mut buf_reader = std::io::BufReader::new(file);
     let mut total_bytes:usize =0;
     loop {
-        let mut line=String::from(format!("{:08x} ", total_bytes));
+        let mut line=String::from(format!("{:07x} ", total_bytes));
         let bytes_read = match buf_reader.read(&mut buffer) {
             Ok(bytes_read) => bytes_read,
             Err(e) => return Err(e),
