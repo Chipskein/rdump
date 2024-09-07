@@ -75,7 +75,6 @@ pub fn dump(path_buf: PathBuf, canonical: bool) -> Result<String, Error> {
             break;
         }
     }
-    println!("{}", dump_str);
     Ok(dump_str)
 }
 
