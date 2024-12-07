@@ -1,14 +1,15 @@
-use std::io::{Error, Read};
+use std::fs::{File,metadata};
+use std::io::{Error, Read,Seek,SeekFrom,BufReader};
 use std::path::PathBuf;
 
 pub fn dump(path_buf: PathBuf, canonical: bool) -> Result<String, Error> {
     let mut dump_str = String::new();
-    let file = match std::fs::File::open(path_buf) {
+    let file = match File::open(path_buf) {
         Ok(file) => file,
         Err(e) => return Err(e),
     };
     let mut buffer = [0; 16];
-    let mut buf_reader = std::io::BufReader::new(file);
+    let mut buf_reader = BufReader::new(file);
     let mut total_bytes: usize = 0;
     loop {
         let mut line = if !canonical {
@@ -78,6 +79,114 @@ pub fn dump(path_buf: PathBuf, canonical: bool) -> Result<String, Error> {
     Ok(dump_str)
 }
 
+fn get_file_size(file_path: PathBuf) -> Result<u64,Error> {
+    let metadata = metadata(file_path);
+    match metadata {
+        Ok(metadata) => Ok(metadata.len()),
+        Err(e) => Err(e),
+    }
+    
+}
+
+pub fn dump_with_offset(path_buf:PathBuf,offset:u64,limit:u64,canonical: bool) -> Result<String, Error> {
+    let mut dump_str = String::new();
+    let mut file = match File::open(path_buf.clone()) {
+        Ok(file) => file,
+        Err(e) => return Err(e),
+    };
+    let file_size=match get_file_size(path_buf.clone()){
+        Ok(size)=>size,
+        Err(e)=>return Err(e),
+    };
+    if offset>file_size{
+        return Ok(String::from("Offset is greater than file size"));
+    }
+    if offset+limit>file_size{
+        return Ok(String::from("Offset+Limit is greater than file size"));
+    }
+    if offset % 16 != 0 {
+        return Ok(String::from("Offset is not multiple of 16"));
+    }
+    if limit % 16 != 0 {
+        return Ok(String::from("Limit is not multiple of 16"));
+    }
+
+    match file.seek(SeekFrom::Start(offset)){
+        Ok(_)=>{},
+        Err(e)=>return Err(e),
+    }
+    let mut buffer = [0;16];
+    let mut buf_reader = std::io::BufReader::new(file);
+    let mut total_bytes_read: usize = 0;
+    loop {
+        let mut line = if !canonical {
+            String::from(format!("{:07x} ", offset as usize+total_bytes_read))
+        } else {
+            String::from(format!("{:08x}  ", offset as usize+total_bytes_read))
+        };
+        let bytes_read = match buf_reader.read(&mut buffer) {
+            Ok(bytes_read) => bytes_read,
+            Err(e) => return Err(e),
+        };
+        total_bytes_read += bytes_read;
+        if !canonical {
+            for i in (0..bytes_read).step_by(2) {
+                if i + 1 < bytes_read {
+                    let bytes = format!("{:02x?}{:02x?}", buffer[i + 1], buffer[i]);
+                    line.push_str(&bytes);
+                } else {
+                    let bytes = format!("{:04x?}", buffer[i]);
+                    line.push_str(&bytes);
+                }
+                if i + 2 < bytes_read {
+                    line.push(' ');
+                }
+            }
+        } else {
+            let mut ascii_text = if bytes_read != 0 {
+                String::from(" |")
+            } else {
+                String::from(" ")
+            };
+            for i in 0..16 {
+                if bytes_read == 0{
+                    continue;
+                }
+                if i >= bytes_read {
+                    line.push_str("   ");
+                    if i == 7 {
+                        line.push(' ');
+                    }
+                    continue;
+                }
+                line.push_str(&format!("{:02x} ", buffer[i]));
+                if i == 7 {
+                    line.push(' ');
+                }
+                let c = buffer[i] as char;
+                if c != '\n' && c != '\r' {
+                    ascii_text.push(c);
+                } else {
+                    ascii_text.push('.');
+                }
+            }
+
+            if bytes_read != 0 {
+                ascii_text.push('|');
+            }
+            line.push_str(&ascii_text);
+        }
+        line.push('\n');
+        dump_str.push_str(&line);
+        buffer = [0; 16];
+        if total_bytes_read == limit as usize {
+            break;
+        }
+    }
+    return Ok(dump_str);
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -93,5 +202,11 @@ mod tests {
         assert_eq!(dump(PathBuf::from("Cargo.toml"), true).unwrap(), "00000000  5b 70 61 63 6b 61 67 65  5d 0a 6e 61 6d 65 20 3d  |[package].name =|\n00000010  20 22 72 64 75 6d 70 22  0a 76 65 72 73 69 6f 6e  | \"rdump\".version|\n00000020  20 3d 20 22 30 2e 31 2e  30 22 0a 65 64 69 74 69  | = \"0.1.0\".editi|\n00000030  6f 6e 20 3d 20 22 32 30  32 31 22 0a 5b 64 65 70  |on = \"2021\".[dep|\n00000040  65 6e 64 65 6e 63 69 65  73 5d                    |endencies]|\n0000004a   \n");
         assert_eq!(dump(PathBuf::from("Cargo.lock"), true).unwrap(), "00000000  23 20 54 68 69 73 20 66  69 6c 65 20 69 73 20 61  |# This file is a|\n00000010  75 74 6f 6d 61 74 69 63  61 6c 6c 79 20 40 67 65  |utomatically @ge|\n00000020  6e 65 72 61 74 65 64 20  62 79 20 43 61 72 67 6f  |nerated by Cargo|\n00000030  2e 0a 23 20 49 74 20 69  73 20 6e 6f 74 20 69 6e  |..# It is not in|\n00000040  74 65 6e 64 65 64 20 66  6f 72 20 6d 61 6e 75 61  |tended for manua|\n00000050  6c 20 65 64 69 74 69 6e  67 2e 0a 76 65 72 73 69  |l editing..versi|\n00000060  6f 6e 20 3d 20 33 0a 0a  5b 5b 70 61 63 6b 61 67  |on = 3..[[packag|\n00000070  65 5d 5d 0a 6e 61 6d 65  20 3d 20 22 72 64 75 6d  |e]].name = \"rdum|\n00000080  70 22 0a 76 65 72 73 69  6f 6e 20 3d 20 22 30 2e  |p\".version = \"0.|\n00000090  31 2e 30 22 0a                                    |1.0\".|\n00000095   \n");
         assert_eq!(dump(PathBuf::from(".gitignore"), true).unwrap(), "00000000  2f 74 61 72 67 65 74 0a                           |/target.|\n00000008   \n");
+    }
+    #[test]
+    fn test_offset(){
+        assert_eq!(dump_with_offset(PathBuf::from("Cargo.toml"),0,16,false).unwrap(), "0000000 705b 6361 616b 6567 0a5d 616e 656d 3d20\n");
+        assert_eq!(dump_with_offset(PathBuf::from("./src/lib.rs"),16,32,false).unwrap(), "0000010 656c 6d2c 7465 6461 7461 7d61 0a3b 7375\n0000020 2065 7473 3a64 693a 3a6f 7b3a 7245 6f72\n");
+        assert_eq!(dump_with_offset(PathBuf::from("Cargo.toml"),32,32,false).unwrap(), "0000020 3d20 2220 2e30 2e31 2230 650a 6964 6974\n0000030 6e6f 3d20 2220 3032 3132 0a22 645b 7065\n");
     }
 }
