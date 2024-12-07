@@ -1,7 +1,7 @@
 use std::fs::{File,metadata};
 use std::io::{Error, Read,Seek,SeekFrom,BufReader};
 use std::path::PathBuf;
-
+//TODO:REFACTOR
 pub fn dump(path_buf: PathBuf, canonical: bool) -> Result<String, Error> {
     let mut dump_str = String::new();
     let file = match File::open(path_buf) {
